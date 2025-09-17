@@ -3,13 +3,12 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Standalone - Supply Management</title>
+    <title>مدیریت موجودی انبارها</title>
     
-    <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
         tailwind.config = {
-            darkMode: 'class', // 'media' or 'class'
+            darkMode: 'class',
             theme: {
                 extend: {
                     fontFamily: {
@@ -20,27 +19,19 @@
         }
     </script>
     
-    <!-- React -->
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-    
-    <!-- Babel for JSX -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    
-    <!-- Supabase Client -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-
-    <!-- Jalaali Date Library -->
-    <script src="https://cdn.jsdelivr.net/npm/jalaali-js/dist/jalaali.js"></script>
 
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;700&display=swap');
         body {
             font-family: 'Vazirmatn', sans-serif;
-            background-color: #f3f4f6;
+            background-color: #f3f4f6; /* bg-gray-100 */
         }
         .dark body {
-            background-color: #111827;
+            background-color: #111827; /* dark:bg-gray-900 */
         }
         .modal-overlay {
             position: fixed;
@@ -68,6 +59,19 @@
         .modal-overlay.open .modal-content {
             transform: scale(1);
         }
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #3498db;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 2rem auto;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
     </style>
 </head>
 <body class="dark">
@@ -79,133 +83,12 @@
         // ==================================================
         const { createClient } = supabase;
         const supabaseUrl = 'https://wehyjatotbzxargnxasg.supabase.co';
-        
-        // The valid Supabase key has been inserted here.
-        const supabaseKey ='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndlaHlqYXRvdGJ6eGFyZ254YXNnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTE5MTIwMjEsImV4cCI6MjA2NzQ4ODAyMX0.2R448DuEBlTrNvaYXiYZ8D5M7MJNv7n1qmIDHQBNFiY';
+        const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndlaHlqYXRvdGJ6eGFyZ254YXNnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTE5MTIwMjEsImV4cCI6MjA2NzQ4ODAyMX0.2R448DuEBlTrNvaYXiYZ8D5M7MJNv7n1qmIDHQBNFiY';
         const supabaseClient = createClient(supabaseUrl, supabaseKey, { global: { fetch: window.fetch.bind(window) } });
 
         // ==================================================
-        // API Service Layer
+        // Helper UI Components
         // ==================================================
-        const api = {
-            async fetchDemandItemsForSupply() {
-                const { data, error } = await supabaseClient
-                    .from('demand_item')
-                    .select(`*, demand(*, profiles(fullname), location(*, city(title))), product(title, brand(title))`)
-                    .in('demandstatusid', [12, 14]) // 12: 'در انتظار تامین', 14: 'تامین تایید شد'
-                    .order('createdat', { ascending: false });
-                if (error) throw error;
-                return data || [];
-            },
-
-            async fetchSuppliersForProduct(productId) {
-                const { data, error } = await supabaseClient
-                    .from('supplierstock')
-                    .select('supplieruserid, unitprice, quantity, location_id, profiles:supplieruserid (fullname)')
-                    .eq('productid', productId)
-                    .eq('is_available', true);
-                if (error) throw error;
-                return data || [];
-            },
-
-            async fetchAssignmentsForItem(itemId) {
-                const { data, error } = await supabaseClient
-                    .from('supplier_demand_assignment')
-                    .select('*')
-                    .eq('demand_item_id', itemId);
-                if (error) throw error;
-                return data || [];
-            },
-
-            async saveAssignments(demandItem, assignments, previousAssignments, suppliers, { totalQuantity, averagePrice }) {
-                // Step 1: Delete existing assignments for this item
-                await supabaseClient
-                    .from('supplier_demand_assignment')
-                    .delete()
-                    .eq('demand_item_id', demandItem.id);
-
-                // Step 2: Prepare new assignments to insert
-                const newAssignmentsToInsert = Object.entries(assignments)
-                    .map(([supplierId, assignment]) => {
-                        const quantity = Number(assignment.quantity);
-                        if (quantity > 0) {
-                            const supplier = suppliers.find(s => s.supplieruserid === supplierId);
-                            if (!supplier) return null;
-
-                            const updatedPrice = parseFloat(assignment.updatedPrice);
-                            const priceToUse = !isNaN(updatedPrice) ? updatedPrice : supplier.unitprice;
-                            return {
-                                demand_item_id: demandItem.id,
-                                supplieruserid: supplierId,
-                                locationid: supplier.location_id,
-                                assigned_quantity: quantity,
-                                assigned_price: priceToUse,
-                            };
-                        }
-                        return null;
-                    })
-                    .filter(Boolean);
-
-                // Step 3: Insert new assignments if any, or clear the item's approval status
-                if (newAssignmentsToInsert.length > 0) {
-                    const { data: inserted, error: insertError } = await supabaseClient
-                        .from('supplier_demand_assignment')
-                        .insert(newAssignmentsToInsert)
-                        .select();
-                    if (insertError) throw insertError;
-                    
-                    await supabaseClient.from('supplier_demand_assignment_log').insert({
-                        demand_item_id: demandItem.id,
-                        action: previousAssignments.length > 0 ? 'UPDATED' : 'CREATED',
-                        previous_values: previousAssignments,
-                        new_values: inserted,
-                    });
-                    
-                    await supabaseClient.from('demand_item').update({
-                        approved_supply_quantity: totalQuantity,
-                        approved_supply_price: averagePrice,
-                        demandstatusid: 14, // 'تامین تایید شد'
-                    }).eq('id', demandItem.id);
-                } else {
-                    if (previousAssignments.length > 0) {
-                        await supabaseClient.from('supplier_demand_assignment_log').insert({
-                            demand_item_id: demandItem.id,
-                            action: 'CLEARED',
-                            previous_values: previousAssignments,
-                            new_values: [],
-                        });
-                    }
-                    await supabaseClient.from('demand_item').update({
-                        approved_supply_quantity: null,
-                        approved_supply_price: null,
-                        demandstatusid: 12, // 'در انتظار تامین'
-                    }).eq('id', demandItem.id);
-                }
-            }
-        };
-
-        // ==================================================
-        // Helper Functions & UI Components
-        // ==================================================
-        const formatCurrency = (value) => {
-            if (value === null || typeof value === 'undefined' || isNaN(value)) return '-';
-            return `${Number(value).toLocaleString('fa-IR')} تومان`;
-        };
-        
-        const toJalaaliDate = (isoDate) => {
-            if (!isoDate) return '-';
-            try {
-                const date = new Date(isoDate);
-                const jalaaliDate = jalaali.toJalaali(date.getFullYear(), date.getMonth() + 1, date.getDate());
-                const month = String(jalaaliDate.jm).padStart(2, '0');
-                const day = String(jalaaliDate.jd).padStart(2, '0');
-                return `${jalaaliDate.jy}/${month}/${day}`;
-            } catch (e) {
-                console.error("Error converting date:", e);
-                return '-';
-            }
-        };
-
         const Modal = ({ isOpen, onClose, title, children }) => {
             if (!isOpen) return null;
             return (
@@ -221,150 +104,216 @@
             );
         };
 
-        // ==================================================
-        // Assign Suppliers Modal Component
-        // ==================================================
-        const AssignSuppliersModal = ({ isOpen, onClose, onSave, demandItem }) => {
-            const [suppliers, setSuppliers] = React.useState([]);
-            const [isLoading, setIsLoading] = React.useState(true);
-            const [error, setError] = React.useState('');
-            const [assignments, setAssignments] = React.useState({});
-            const [previousAssignments, setPreviousAssignments] = React.useState([]);
+        const SearchableSelect = ({ options, value, onChange, placeholder, disabled = false }) => {
+            const [searchTerm, setSearchTerm] = React.useState('');
+            const [isOpen, setIsOpen] = React.useState(false);
+            const wrapperRef = React.useRef(null);
+
+            const selectedOption = React.useMemo(() => options.find(opt => opt.id === value), [options, value]);
+
+            const filteredOptions = React.useMemo(() => {
+                if (!searchTerm) return options;
+                const lowerCaseSearchTerm = searchTerm.toLowerCase();
+                return options.filter(opt =>
+                    opt.title.toLowerCase().includes(lowerCaseSearchTerm) ||
+                    opt.id.toString().includes(lowerCaseSearchTerm)
+                );
+            }, [options, searchTerm]);
 
             React.useEffect(() => {
-                if (isOpen && demandItem) {
-                    const fetchData = async () => {
-                        setIsLoading(true);
-                        setError('');
-                        try {
-                            const [fetchedSuppliers, fetchedAssignments] = await Promise.all([
-                                api.fetchSuppliersForProduct(demandItem.productid),
-                                demandItem.demandstatusid === 14 ? api.fetchAssignmentsForItem(demandItem.id) : Promise.resolve([])
-                            ]);
-                            
-                            setSuppliers(fetchedSuppliers);
-                            setPreviousAssignments(fetchedAssignments);
-
-                            const initialAssignments = {};
-                            fetchedAssignments.forEach(assign => {
-                                initialAssignments[assign.supplieruserid] = {
-                                    quantity: assign.assigned_quantity,
-                                    updatedPrice: assign.assigned_price
-                                };
-                            });
-                            setAssignments(initialAssignments);
-
-                        } catch (err) {
-                            console.error("Error fetching data for modal:", err);
-                            setError("خطا در دریافت اطلاعات.");
-                        } finally {
-                            setIsLoading(false);
-                        }
-                    };
-                    fetchData();
-                }
-            }, [isOpen, demandItem]);
-
-            const handleAssignmentChange = (supplierId, field, value) => {
-                setAssignments(prev => ({
-                    ...prev,
-                    [supplierId]: { ...prev[supplierId], [field]: value }
-                }));
-            };
-
-            const { totalQuantity, averagePrice } = React.useMemo(() => {
-                let totalQty = 0;
-                let totalPriceXQty = 0;
-                for (const supplierId in assignments) {
-                    const quantity = Number(assignments[supplierId]?.quantity);
-                    if (quantity > 0) {
-                        const supplier = suppliers.find(s => s.supplieruserid === supplierId);
-                        if (supplier) {
-                            const updatedPrice = parseFloat(assignments[supplierId].updatedPrice);
-                            const priceToUse = !isNaN(updatedPrice) ? updatedPrice : supplier.unitprice;
-                            totalQty += quantity;
-                            totalPriceXQty += quantity * priceToUse;
-                        }
+                function handleClickOutside(event) {
+                    if (wrapperRef.current && !wrapperRef.current.contains(event.target)) {
+                        setIsOpen(false);
+                        setSearchTerm('');
                     }
                 }
-                const avgPrice = totalQty > 0 ? totalPriceXQty / totalQty : 0;
-                return { totalQuantity: totalQty, averagePrice: avgPrice };
-            }, [assignments, suppliers]);
+                document.addEventListener("mousedown", handleClickOutside);
+                return () => document.removeEventListener("mousedown", handleClickOutside);
+            }, [wrapperRef]);
 
-            const handleSave = async () => {
+            const handleSelect = (option) => {
+                onChange(option.id);
+                setSearchTerm('');
+                setIsOpen(false);
+            };
+
+            return (
+                <div className="relative" ref={wrapperRef}>
+                    <input
+                        type="text"
+                        placeholder={selectedOption ? selectedOption.title : placeholder}
+                        value={searchTerm}
+                        onChange={e => setSearchTerm(e.target.value)}
+                        onFocus={() => setIsOpen(true)}
+                        disabled={disabled}
+                        className="w-full bg-gray-100 dark:bg-gray-700 p-2 rounded-lg"
+                    />
+                    {isOpen && !disabled && (
+                        <div className="absolute z-10 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg shadow-lg max-h-60 overflow-y-auto">
+                            {filteredOptions.length > 0 ? (
+                                filteredOptions.map(option => (
+                                    <div
+                                        key={option.id}
+                                        onClick={() => handleSelect(option)}
+                                        className="p-2 hover:bg-indigo-100 dark:hover:bg-indigo-800 cursor-pointer"
+                                    >
+                                        {option.title}
+                                    </div>
+                                ))
+                            ) : (
+                                <div className="p-2 text-gray-500">موردی یافت نشد.</div>
+                            )}
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        // ==================================================
+        // Core Components for this App
+        // ==================================================
+        
+        const InventoryManagementModal = ({ isOpen, onClose, location, products }) => {
+            const [inventory, setInventory] = React.useState([]);
+            const [isLoading, setIsLoading] = React.useState(true);
+            const [error, setError] = React.useState('');
+            const [newProductForm, setNewProductForm] = React.useState({ product_id: '', quantity: '', unitprice: '', is_available: true });
+
+            const fetchInventory = React.useCallback(async () => {
+                if (!location) return;
                 setIsLoading(true);
                 setError('');
                 try {
-                    await api.saveAssignments(demandItem, assignments, previousAssignments, suppliers, { totalQuantity, averagePrice });
-                    onSave();
+                    const { data, error: stockError } = await supabaseClient
+                        .from('supplierstock')
+                        .select('*, product(id, title, brand(title), productproperty(*, propertykey(title)))')
+                        .eq('location_id', location.id);
+                    
+                    if (stockError) throw stockError;
+                    
+                    setInventory(data || []);
                 } catch (err) {
-                    console.error("Error saving assignment:", err);
-                    setError(`خطا در ذخیره تخصیص: ${err.message}`);
+                    console.error("Error fetching inventory:", err);
+                    setError(`خطا در بارگذاری موجودی: ${err.message}`);
                 } finally {
                     setIsLoading(false);
+                }
+            }, [location]);
+
+            React.useEffect(() => {
+                if (isOpen) {
+                    fetchInventory();
+                }
+            }, [isOpen, fetchInventory]);
+            
+            const handleUpdateStock = async (productId, field, value) => {
+                const { error } = await supabaseClient
+                    .from('supplierstock')
+                    .update({ [field]: value })
+                    .eq('location_id', location.id)
+                    .eq('productid', productId);
+
+                if (error) {
+                    setError(`خطا در به‌روزرسانی: ${error.message}`);
+                    // Optional: show a toast notification
+                    fetchInventory(); // Re-fetch to revert optimistic update on failure
+                }
+            };
+
+            const handleDeleteStock = async (productId) => {
+                const { error } = await supabaseClient
+                    .from('supplierstock')
+                    .delete()
+                    .eq('location_id', location.id)
+                    .eq('productid', productId);
+                if (error) setError(`خطا در حذف: ${error.message}`);
+                else setInventory(prev => prev.filter(item => item.product.id !== productId));
+            };
+            
+            const handleAddProduct = async (e) => {
+                e.preventDefault();
+                if (!newProductForm.product_id) return;
+                
+                const { error } = await supabaseClient.from('supplierstock').insert({
+                    location_id: location.id,
+                    productid: newProductForm.product_id,
+                    supplieruserid: location.supplier.id,
+                    quantity: newProductForm.quantity === '' ? null : Number(newProductForm.quantity),
+                    unitprice: newProductForm.unitprice === '' ? null : Number(newProductForm.unitprice),
+                    is_available: newProductForm.is_available
+                });
+                if (error) {
+                    setError(`خطا در افزودن محصول: ${error.message}`);
+                } else {
+                    setNewProductForm({ product_id: '', quantity: '', unitprice: '', is_available: true });
+                    fetchInventory();
                 }
             };
             
-            const handleClear = async () => {
-                setIsLoading(true);
-                setError('');
-                try {
-                    await api.saveAssignments(demandItem, {}, previousAssignments, suppliers, { totalQuantity: 0, averagePrice: 0 });
-                    onSave();
-                } catch (err) {
-                     console.error("Error clearing assignment:", err);
-                    setError(`خطا در حذف تخصیص: ${err.message}`);
-                } finally {
-                    setIsLoading(false);
-                }
-            }
-            
-            const isSaveDisabled = isLoading || (totalQuantity === 0 && previousAssignments.length === 0);
+            const availableProducts = React.useMemo(() => {
+                return products
+                    .filter(p => !inventory.some(i => i.product.id === p.id))
+                    .map(p => {
+                        const telegramCodeProp = p.productproperty?.find(
+                            prop => prop.propertykey?.title === 'کد کالا (تلگرام)'
+                        );
+                        const telegramCode = telegramCodeProp ? telegramCodeProp.value : '';
+                        const baseTitle = `${p.brand ? p.brand.title + ' ' : ''}${p.title}`;
+                        const displayTitle = `${telegramCode ? `[${telegramCode}] ` : ''}${baseTitle} [Product ID = ${p.id}]`;
+                        return { id: p.id, title: displayTitle };
+                    });
+            }, [products, inventory]);
+
+            const warehouseAttr = location?.location_attribute_value?.find(attr => attr.location_attribute_key.title.toLowerCase().trim() === 'warehouse name');
+            const warehouseName = warehouseAttr?.value || location?.title || 'انبار اصلی';
+            const modalTitle = `مدیریت موجودی: ${location?.supplier?.fullname} - ${warehouseName} (کد: ${location?.id})`;
 
             return (
-                <Modal isOpen={isOpen} onClose={onClose} title={`تامین کالا: ${demandItem?.product?.title}`}>
-                    {isLoading && <p>در حال بارگذاری تامین‌کنندگان...</p>}
-                    {error && <p className="text-red-500">{error}</p>}
+                <Modal isOpen={isOpen} onClose={onClose} title={modalTitle}>
+                    {isLoading && <div className="spinner"></div>}
+                    {error && <p className="text-red-500 mb-4 p-3 bg-red-100 dark:bg-red-900/50 rounded-lg">{error}</p>}
                     {!isLoading && (
-                        <div className="space-y-6">
-                            <div className="space-y-3 max-h-80 overflow-y-auto pr-2">
-                                {suppliers.length > 0 ? suppliers.map(stock => (
-                                    <div key={stock.supplieruserid} className="grid grid-cols-5 gap-4 items-center p-3 bg-gray-100 dark:bg-gray-700/50 rounded-lg">
-                                        <div className="col-span-2">
-                                            <p className="font-semibold">{stock.profiles.fullname}</p>
-                                            <p className="text-xs text-gray-500 dark:text-gray-400">قیمت اصلی: {formatCurrency(stock.unitprice)}</p>
-                                        </div>
-                                        <div className="text-sm text-center">
-                                            <label className="text-xs text-gray-500 dark:text-gray-400 block">قیمت جدید</label>
-                                            <input type="number" min="0" placeholder={stock.unitprice} value={assignments[stock.supplieruserid]?.updatedPrice ?? ''} onChange={e => handleAssignmentChange(stock.supplieruserid, 'updatedPrice', e.target.value)} className="w-full bg-white dark:bg-gray-600 p-2 rounded-lg text-center" />
-                                        </div>
-                                        <p className="text-sm text-center">موجودی: {stock.quantity || 'نامشخص'}</p>
-                                        <input type="number" min="0" placeholder="تعداد" value={assignments[stock.supplieruserid]?.quantity || ''} onChange={e => handleAssignmentChange(stock.supplieruserid, 'quantity', e.target.value)} className="w-full bg-white dark:bg-gray-600 p-2 rounded-lg text-center" />
+                        <div className="space-y-4">
+                            <form onSubmit={handleAddProduct} className="p-4 border border-gray-200 dark:border-gray-700 rounded-lg space-y-3 bg-gray-50 dark:bg-gray-800/50">
+                                <h4 className="font-semibold">افزودن محصول جدید به انبار</h4>
+                                <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                                    <div className="md:col-span-2">
+                                        <label className="text-sm block mb-1">محصول</label>
+                                        <SearchableSelect options={availableProducts} value={newProductForm.product_id} onChange={id => setNewProductForm({...newProductForm, product_id: id})} placeholder="انتخاب محصول..." />
                                     </div>
-                                )) : <p className="text-center text-gray-500 py-4">هیچ تامین‌کننده فعالی برای این کالا یافت نشد.</p>}
-                            </div>
-                            <div className="p-4 bg-indigo-100 dark:bg-indigo-900/50 rounded-lg space-y-3 border-t-4 border-indigo-500">
-                                <h4 className="font-bold text-lg">خلاصه تخصیص</h4>
-                                <div className="flex justify-between items-center"><span className="text-gray-700 dark:text-gray-300">تعداد کل تامین‌شده:</span><span className="font-bold text-xl">{totalQuantity.toLocaleString('fa-IR')}</span></div>
-                                <div className="flex justify-between items-center"><span className="text-gray-700 dark:text-gray-300">میانگین قیمت وزنی:</span><span className="font-bold text-xl">{formatCurrency(averagePrice)}</span></div>
-                                <div className="flex justify-between items-center text-red-600 dark:text-red-400"><span className="font-semibold">تعداد درخواستی مشتری:</span><span className="font-bold text-xl">{demandItem?.quantity.toLocaleString('fa-IR')}</span></div>
-                            </div>
-                            <div className="flex justify-between items-center pt-4 border-t border-gray-200 dark:border-gray-700">
-                                <div>
-                                    {previousAssignments.length > 0 && (
-                                        <button 
-                                            onClick={handleClear} 
-                                            disabled={isLoading} 
-                                            className="bg-red-600 hover:bg-red-700 text-white py-2 px-5 rounded-lg font-semibold disabled:bg-red-400 disabled:cursor-not-allowed"
-                                        >
-                                            {isLoading ? 'در حال پردازش...' : 'حذف تخصیص'}
-                                        </button>
-                                    )}
+                                    <div>
+                                        <label className="text-sm block mb-1">قیمت (تومان)</label>
+                                        <input type="number" min="0" value={newProductForm.unitprice} onChange={e => setNewProductForm({...newProductForm, unitprice: e.target.value})} className="w-full bg-white dark:bg-gray-700 p-2 rounded-lg" />
+                                    </div>
+                                    <div>
+                                        <label className="text-sm block mb-1">تعداد (اختیاری)</label>
+                                        <input type="number" min="0" value={newProductForm.quantity} onChange={e => setNewProductForm({...newProductForm, quantity: e.target.value})} className="w-full bg-white dark:bg-gray-700 p-2 rounded-lg" />
+                                    </div>
                                 </div>
-                                <div className="flex items-center gap-4">
-                                    <button onClick={onClose} className="bg-gray-200 dark:bg-gray-600 py-2 px-5 rounded-lg font-semibold">انصراف</button>
-                                    <button onClick={handleSave} disabled={isSaveDisabled} className="bg-green-600 text-white py-2 px-5 rounded-lg font-semibold disabled:bg-green-400 disabled:cursor-not-allowed">{isLoading ? 'در حال ذخیره...' : 'ذخیره و تایید'}</button>
+                                <div className="flex items-center justify-between pt-2">
+                                    <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={newProductForm.is_available} onChange={e => setNewProductForm({...newProductForm, is_available: e.target.checked})} className="rounded" /> موجود</label>
+                                    <button type="submit" className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg font-semibold">افزودن</button>
                                 </div>
+                            </form>
+                            <div className="space-y-2 max-h-[50vh] overflow-y-auto pr-2">
+                                {inventory.map(item => {
+                                    const telegramCodeProp = item.product.productproperty?.find(
+                                        prop => prop.propertykey?.title === 'کد کالا (تلگرام)'
+                                    );
+                                    const telegramCode = telegramCodeProp ? telegramCodeProp.value : '';
+                                    return (
+                                        <div key={item.product.id} className="p-3 bg-gray-50 dark:bg-gray-700/50 rounded-md flex flex-wrap items-center justify-between gap-4">
+                                            <span className="font-semibold flex-grow min-w-[200px]">{`${telegramCode ? `[${telegramCode}] ` : ''}${item.product.brand ? item.product.brand.title + ' ' : ''}${item.product.title} [Product ID = ${item.product.id}]`}</span>
+                                            <div className="flex items-center gap-3 flex-wrap">
+                                                <input type="number" min="0" placeholder="قیمت" defaultValue={item.unitprice} onBlur={e => handleUpdateStock(item.product.id, 'unitprice', e.target.value === '' ? null : Number(e.target.value))} className="w-28 bg-white dark:bg-gray-600 p-1 rounded-md text-center" />
+                                                <input type="number" min="0" placeholder="تعداد" defaultValue={item.quantity} onBlur={e => handleUpdateStock(item.product.id, 'quantity', e.target.value === '' ? null : Number(e.target.value))} className="w-20 bg-white dark:bg-gray-600 p-1 rounded-md text-center" />
+                                                <label className="flex items-center gap-1 text-sm"><input type="checkbox" defaultChecked={item.is_available} onChange={e => handleUpdateStock(item.product.id, 'is_available', e.target.checked)} className="rounded" /> موجود</label>
+                                                <button onClick={() => handleDeleteStock(item.product.id)} className="text-red-500 hover:text-red-700 font-bold text-lg leading-none">×</button>
+                                            </div>
+                                        </div>
+                                    )
+                                })}
+                                {inventory.length === 0 && <p className="text-center text-gray-500 py-4">موجودی برای این مکان ثبت نشده است.</p>}
                             </div>
                         </div>
                     )}
@@ -372,27 +321,79 @@
             );
         };
         
-        // ==================================================
-        // Main Supply Management Component
-        // ==================================================
-        const SupplyManagement = () => {
-            const [demandItems, setDemandItems] = React.useState([]);
+        const SupplierWarehouses = () => {
             const [isLoading, setIsLoading] = React.useState(true);
             const [error, setError] = React.useState('');
-            const [isModalOpen, setIsModalOpen] = React.useState(false);
-            const [selectedItem, setSelectedItem] = React.useState(null);
+            
+            // Data States
+            const [supplierLocations, setSupplierLocations] = React.useState([]);
+            const [products, setProducts] = React.useState([]);
+
+            // Interaction States
             const [searchTerm, setSearchTerm] = React.useState('');
-            const [showEmergencyOnly, setShowEmergencyOnly] = React.useState(false);
+            const [managingLocation, setManagingLocation] = React.useState(null);
+
+            // Modal States
+            const [isInventoryModalOpen, setInventoryModalOpen] = React.useState(false);
 
             const fetchData = async () => {
                 setIsLoading(true);
                 setError('');
                 try {
-                    const data = await api.fetchDemandItemsForSupply();
-                    setDemandItems(data);
+                    const supplierRoleRes = await supabaseClient.from('role').select('id').eq('title', 'Supplier').single();
+                    if (supplierRoleRes.error) throw supplierRoleRes.error;
+                    const supplierRoleId = supplierRoleRes.data?.id;
+
+                    if (!supplierRoleId) {
+                        setSupplierLocations([]);
+                        throw new Error("Role 'Supplier' not found.");
+                    }
+                    
+                    // New paginated product fetch function to ensure all products are loaded,
+                    // bypassing the default 1000-row limit.
+                    const fetchAllProducts = async () => {
+                        let allProducts = [];
+                        let page = 0;
+                        const pageSize = 1000; // Supabase limit per request
+                        let keepFetching = true;
+
+                        while (keepFetching) {
+                            const { data, error } = await supabaseClient
+                                .from('product')
+                                .select('id, title, brand(title), productproperty(*, propertykey(title))')
+                                .eq('isdeleted', false)
+                                .order('title')
+                                .range(page * pageSize, (page + 1) * pageSize - 1);
+
+                            if (error) throw error;
+
+                            if (data && data.length > 0) {
+                                allProducts = allProducts.concat(data);
+                                page++;
+                                // If we get less than a full page, we've reached the end
+                                if (data.length < pageSize) {
+                                    keepFetching = false;
+                                }
+                            } else {
+                                keepFetching = false; // No more data
+                            }
+                        }
+                        return allProducts;
+                    };
+                    
+                    const [locationsRes, allProducts] = await Promise.all([
+                        supabaseClient.from('userlocation').select('location!inner(*, city(*, province(*)), shippingcompany(*), location_attribute_value(*, location_attribute_key(title))), profiles!inner(id, fullname, roleid)').eq('profiles.roleid', supplierRoleId),
+                        fetchAllProducts()
+                    ]);
+
+                    if (locationsRes.error) throw locationsRes.error;
+
+                    setSupplierLocations(locationsRes.data || []);
+                    setProducts(allProducts || []);
+
                 } catch (err) {
-                    console.error("Error fetching demand items:", err);
-                    setError("خطا در بارگذاری آیتم‌های نیازمند تامین. از معتبر بودن کلید API و اتصال اینترنت خود اطمینان حاصل کنید.");
+                    console.error("Error fetching data:", err);
+                    setError(`خطا در بارگذاری اطلاعات: ${err.message}`);
                 } finally {
                     setIsLoading(false);
                 }
@@ -402,131 +403,104 @@
                 fetchData();
             }, []);
 
-            const handleOpenModal = (item) => { setSelectedItem(item); setIsModalOpen(true); };
-            const handleCloseModal = () => { setSelectedItem(null); setIsModalOpen(false); };
-            const handleSave = () => { handleCloseModal(); fetchData(); };
-
-            const filteredDemandItems = React.useMemo(() => {
-                return demandItems
-                    .filter(item => !showEmergencyOnly || item.demand.is_emergency)
-                    .filter(item => {
-                        if (!searchTerm) return true;
-                        const term = searchTerm.toLowerCase();
-                        return [
-                            item.demand.profiles.fullname,
-                            item.demand.location?.city?.title,
-                            item.product.title,
-                            item.product.brand?.title,
-                            item.demand_admin_note,
-                            item.supply_admin_note,
-                            toJalaaliDate(item.demand.createdat)
-                        ].some(field => field?.toLowerCase().includes(term));
-                    });
-            }, [demandItems, searchTerm, showEmergencyOnly]);
+            const handleManageInventory = (location, supplier) => {
+                setManagingLocation({ ...location, supplier });
+                setInventoryModalOpen(true);
+            };
+            
+            const filteredLocations = React.useMemo(() => {
+                if (!searchTerm) return supplierLocations;
+                return supplierLocations.filter(item => {
+                    const searchTermLower = searchTerm.toLowerCase();
+                    const supplierNameMatch = item.profiles?.fullname?.toLowerCase().includes(searchTermLower);
+                    const cityMatch = item.location?.city?.title?.toLowerCase().includes(searchTermLower);
+                    const addressMatch = item.location?.address?.toLowerCase().includes(searchTermLower);
+                    return supplierNameMatch || cityMatch || addressMatch;
+                });
+            }, [supplierLocations, searchTerm]);
 
             return (
-                <div className="p-4 sm:p-6 lg:p-8 text-gray-900 dark:text-gray-100">
-                    <h1 className="text-2xl md:text-3xl font-bold mb-6">مدیریت تامین</h1>
-                    <p className="mb-6 text-gray-600 dark:text-gray-400">در این بخش، برای آیتم‌های تقاضا که در وضعیت "در انتظار تامین" هستند، تامین‌کننده تخصیص دهید.</p>
+                 <div className="p-4 sm:p-6 lg:p-8 text-gray-900 dark:text-gray-100">
+                    <h1 className="text-2xl md:text-3xl font-bold mb-6">مدیریت موجودی انبارها (مکان تامین‌کنندگان)</h1>
                     
-                    <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow mb-6">
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
-                            <div className="md:col-span-2">
-                                <label className="text-sm font-medium text-gray-600 dark:text-gray-300 mb-1 block">جستجو</label>
-                                <input type="text" placeholder="جستجوی محصول، مشتری، شهر، تاریخ یا یادداشت‌ها..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="w-full p-2 bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg" />
-                            </div>
-                            <div className="flex items-center">
-                                <input type="checkbox" id="emergencyFilter" checked={showEmergencyOnly} onChange={e => setShowEmergencyOnly(e.target.checked)} className="ml-2 h-4 w-4 rounded" />
-                                <label htmlFor="emergencyFilter" className="text-sm font-medium">فقط فوری‌ها</label>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow overflow-x-auto">
-                        <table className="w-full text-right">
-                            <thead>
-                                <tr className="border-b border-gray-200 dark:border-gray-700">
-                                    <th className="p-3">تاریخ</th>
-                                    <th className="p-3">محصول</th>
-                                    <th className="p-3">مشتری</th>
-                                    <th className="p-3">شهر مشتری</th>
-                                    <th className="p-3">تعداد درخواستی</th>
-                                    <th className="p-3">فوریت</th>
-                                    <th className="p-3">شناسه محصول</th>
-                                    <th className="p-3">شناسه تقاضا</th>
-                                    <th className="p-3">عملیات</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {isLoading ? (
-                                    <tr><td colSpan="9" className="text-center p-8">در حال بارگذاری...</td></tr>
-                                ) : error ? (
-                                    <tr><td colSpan="9" className="text-center p-8 text-red-500">{error}</td></tr>
-                                ) : filteredDemandItems.length === 0 ? (
-                                    <tr><td colSpan="9" className="text-center p-8 text-gray-500">موردی با این فیلترها یافت نشد.</td></tr>
-                                ) : (
-                                    filteredDemandItems.map(item => (
-                                        <React.Fragment key={item.id}>
-                                            <tr className="border-b border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50">
-                                                <td className="p-3 font-mono text-sm whitespace-nowrap">{toJalaaliDate(item.demand.createdat)}</td>
-                                                <td className="p-3 font-semibold">{item.product.brand?.title} {item.product.title}</td>
-                                                <td className="p-3">{item.demand.profiles.fullname}</td>
-                                                <td className="p-3">{item.demand.location?.city?.title || '-'}</td>
-                                                <td className="p-3 font-mono text-center">{item.quantity}</td>
-                                                <td className="p-3 text-center">
-                                                    {item.demand.is_emergency && <span className="px-2 py-1 text-xs font-semibold rounded-full bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200">فوری</span>}
-                                                </td>
-                                                <td className="p-3 font-mono text-xs">{item.productid}</td>
-                                                <td className="p-3 font-mono text-xs">{item.demandid}</td>
-                                                <td className="p-3">
-                                                    <button 
-                                                        onClick={() => handleOpenModal(item)} 
-                                                        className={`font-bold py-1 px-3 rounded-lg text-sm text-white ${
-                                                            item.demandstatusid === 14 
-                                                            ? 'bg-blue-600 hover:bg-blue-700' 
-                                                            : 'bg-green-600 hover:bg-green-700'
-                                                        }`}
-                                                    >
-                                                        {item.demandstatusid === 14 ? 'ویرایش تخصیص' : 'تخصیص تامین‌کننده'}
-                                                    </button>
-                                                </td>
-                                            </tr>
-                                            {(item.demand_admin_note || item.supply_admin_note) && (
-                                                <tr className="bg-gray-50 dark:bg-gray-700/50">
-                                                    <td colSpan="9" className="px-4 py-2 text-xs text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700">
-                                                        {item.demand_admin_note && <div><strong>یادداشت مدیر تقاضا:</strong> {item.demand_admin_note}</div>}
-                                                        {item.supply_admin_note && <div className="mt-1"><strong>یادداشت مدیر تامین:</strong> {item.supply_admin_note}</div>}
-                                                    </td>
-                                                </tr>
-                                            )}
-                                        </React.Fragment>
-                                    ))
-                                )}
-                            </tbody>
-                        </table>
+                    <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow-md mb-6">
+                        <input
+                            type="text"
+                            placeholder="جستجو بر اساس نام تامین‌کننده، شهر یا آدرس..."
+                            value={searchTerm}
+                            onChange={e => setSearchTerm(e.target.value)}
+                            className="w-full p-2 bg-gray-100 dark:bg-gray-700 border border-transparent rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        />
                     </div>
 
-                    {isModalOpen && <AssignSuppliersModal isOpen={isModalOpen} onClose={handleCloseModal} onSave={handleSave} demandItem={selectedItem} />}
+                    {isLoading && <div className="spinner"></div>}
+                    {error && <p className="text-center p-8 text-red-500 bg-red-100 dark:bg-red-900/50 rounded-lg">{error}</p>}
+
+                    {!isLoading && (
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                            {filteredLocations.length > 0 ? filteredLocations.map(item => {
+                                const warehouseAttr = item.location.location_attribute_value?.find(attr => attr.location_attribute_key.title.toLowerCase().trim() === 'warehouse name');
+                                const warehouseName = warehouseAttr?.value || item.location.title || 'انبار اصلی';
+                                
+                                return (
+                                <div key={item.location.id} className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-5 flex flex-col justify-between transition-all hover:shadow-xl hover:-translate-y-1">
+                                    <div>
+                                        <h3 className="text-xl font-bold text-gray-900 dark:text-white">
+                                            {item.profiles.fullname}
+                                        </h3>
+                                        <div className="mt-4 text-sm text-gray-600 dark:text-gray-300 space-y-2 border-t border-gray-200 dark:border-gray-700 pt-3">
+                                            <p><strong>استان:</strong> {item.location.city?.province?.title || '-'}</p>
+                                            <p><strong>شهر:</strong> {item.location.city?.title || '-'}</p>
+                                            <p><strong>نام انبار:</strong> {warehouseName}</p>
+                                            <p><strong>کد مکان:</strong> {item.location.id}</p>
+                                            <p><strong>آدرس:</strong> {item.location.address || '-'}</p>
+                                            <p><strong>کد پستی:</strong> {item.location.postalcode || '-'}</p>
+                                        </div>
+                                    </div>
+                                    <div className="mt-5 pt-4 border-t border-gray-200 dark:border-gray-700 flex justify-end items-center gap-3">
+                                        <button onClick={() => handleManageInventory(item.location, item.profiles)} className="w-full text-sm bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-lg transition-colors">
+                                            مدیریت موجودی
+                                        </button>
+                                    </div>
+                                </div>
+                            )}) : 
+                            <div className="col-span-full text-center py-12 bg-white dark:bg-gray-800 rounded-lg shadow">
+                                <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">هیچ مکانی یافت نشد</h3>
+                                <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">مکانی برای تامین‌کنندگان با فیلترهای انتخابی شما مطابقت ندارد.</p>
+                             </div>
+                            }
+                        </div>
+                    )}
+                    
+                    {isInventoryModalOpen && managingLocation && (
+                        <InventoryManagementModal 
+                            key={managingLocation.id} 
+                            isOpen={isInventoryModalOpen} 
+                            onClose={() => setInventoryModalOpen(false)} 
+                            location={managingLocation} 
+                            products={products} 
+                        />
+                    )}
                 </div>
             );
         };
-
-        // ==================================================
-        // Main App Component to Render SupplyManagement
-        // ==================================================
+        
         const App = () => {
-            return (
-                <main className="min-h-screen bg-gray-100 dark:bg-gray-900">
-                    <SupplyManagement />
-                </main>
-            );
+            // Theme management for dark/light mode
+             React.useEffect(() => {
+                const root = window.document.documentElement;
+                root.classList.add('dark'); // Default to dark mode for this app
+            }, []);
+            
+            return <SupplierWarehouses />;
         };
 
         const container = document.getElementById('root');
         const root = ReactDOM.createRoot(container);
         root.render(<App />);
-       
     </script>
 </body>
 </html>
+
+
 
