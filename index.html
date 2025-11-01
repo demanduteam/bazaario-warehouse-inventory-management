@@ -178,10 +178,11 @@
         const InventoryManagementModal = ({ isOpen, onClose, location, products }) => {
             const [inventory, setInventory] = React.useState([]);
             const [isLoading, setIsLoading] = React.useState(true);
+            const [isSaving, setIsSaving] = React.useState(false); // NEW: Saving state
             const [error, setError] = React.useState('');
             const [formInfo, setFormInfo] = React.useState(''); // State for form-specific info/warnings
             const [newProductForm, setNewProductForm] = React.useState({ product_id: '', quantity: '', unitprice: '', is_available: true });
-            const [highlightedProductId, setHighlightedProductId] = React.useState(null); // NEW: State to filter list
+            const [highlightedProductId, setHighlightedProductId] = React.useState(null); // State to filter list
 
             const fetchInventory = React.useCallback(async () => {
                 if (!location) return;
@@ -211,27 +212,54 @@
                 }
             }, [isOpen, fetchInventory]);
             
-            const handleUpdateStock = async (productId, field, value) => {
-                // Optimistic update
-                setInventory(prev => prev.map(item => 
-                    item.product.id === productId ? { ...item, [field]: value } : item
-                ));
+            // NEW: Handle local state changes for inventory items
+            const handleLocalStockChange = (productId, field, value) => {
+                let parsedValue = value;
+                if (field === 'unitprice' || field === 'quantity') {
+                    parsedValue = (value === '' ? null : Number(value));
+                }
+                setInventory(prev => 
+                    prev.map(item => 
+                        item.product.id === productId ? { ...item, [field]: parsedValue } : item
+                    )
+                );
+            };
 
-                const { error } = await supabaseClient
-                    .from('supplierstock')
-                    .update({ [field]: value })
-                    .eq('location_id', location.id)
-                    .eq('productid', productId); // Use productid which is the foreign key
+            // NEW: Save all changes and close modal
+            const handleSaveAndExit = async () => {
+                setIsSaving(true);
+                setError('');
+                try {
+                    const updatePromises = inventory.map(item => 
+                        supabaseClient
+                            .from('supplierstock')
+                            .update({ 
+                                quantity: item.quantity,
+                                unitprice: item.unitprice,
+                                is_available: item.is_available 
+                            })
+                            .eq('location_id', location.id)
+                            .eq('productid', item.product.id)
+                    );
+                    
+                    const results = await Promise.all(updatePromises);
+                    
+                    const firstError = results.find(res => res.error);
+                    if (firstError) {
+                        throw firstError.error;
+                    }
 
-                if (error) {
-                    setError(`خطا در به‌روزرسانی: ${error.message}`);
-                    // Re-fetch to revert optimistic update on failure
-                    fetchInventory(); 
+                    setIsSaving(false);
+                    onClose(); // Close modal on success
+                } catch (err) {
+                    console.error("Error saving stock:", err);
+                    setError(`خطا در ذخیره تغییرات: ${err.message}`);
+                    setIsSaving(false);
                 }
             };
 
             const handleDeleteStock = async (productId) => {
-                // Optimistic delete
+                // This remains an immediate action
                 const oldInventory = [...inventory];
                 setInventory(prev => prev.filter(item => item.product.id !== productId));
 
@@ -245,7 +273,6 @@
                     setError(`خطا در حذف: ${error.message}`);
                     setInventory(oldInventory); // Revert on failure
                 } else {
-                    // If the deleted product was the highlighted one, clear highlight
                     if (highlightedProductId === productId) {
                         setHighlightedProductId(null);
                         setFormInfo('');
@@ -255,19 +282,19 @@
             };
             
             const handleAddProduct = async (e) => {
+                // This remains an immediate action
                 e.preventDefault();
-                setFormInfo(''); // Clear info
-                setError(''); // Clear main error
+                setFormInfo(''); 
+                setError(''); 
                 if (!newProductForm.product_id) {
                     setFormInfo('لطفا یک محصول انتخاب کنید.');
                     return;
                 }
 
-                // Check for duplicate
                 const isAlreadyAdded = inventory.some(i => i.product.id === newProductForm.product_id);
                 if (isAlreadyAdded) {
                     setFormInfo('این محصول در حال حاضر در انبار موجود است. نمی‌توانید آن را دوباره اضافه کنید.');
-                    return; // Stop execution
+                    return; 
                 }
                 
                 const { error } = await supabaseClient.from('supplierstock').insert({
@@ -282,49 +309,44 @@
                     setError(`خطا در افزودن محصول: ${error.message}`);
                 } else {
                     setNewProductForm({ product_id: '', quantity: '', unitprice: '', is_available: true });
-                    setFormInfo(''); // Clear form info
-                    setHighlightedProductId(null); // Clear highlight
+                    setFormInfo(''); 
+                    setHighlightedProductId(null); 
                     fetchInventory(); // Refresh the list
                 }
             };
 
             const handleProductSelect = (id) => {
-                setFormInfo(''); // Clear previous info
-                setError(''); // Clear main error
+                setFormInfo(''); 
+                setError(''); 
                 if (!id) {
                     setNewProductForm({...newProductForm, product_id: ''});
-                    setHighlightedProductId(null); // Clear highlight if no ID
+                    setHighlightedProductId(null); 
                     return;
                 }
                 
                 const isAlreadyAdded = inventory.some(i => i.product.id === id);
                 if (isAlreadyAdded) {
                     setFormInfo('این محصول در حال حاضر در انبار موجود است. می‌توانید آن را در لیست پایین ویرایش کنید.');
-                    setHighlightedProductId(id); // NEW: Set product to highlight/filter
+                    setHighlightedProductId(id); 
                 } else {
-                    setHighlightedProductId(null); // NEW: Clear highlight if it's a new product
+                    setHighlightedProductId(null); 
                 }
                 setNewProductForm({...newProductForm, product_id: id});
             };
             
-            // Memoize products available to add (those not already in this location's inventory)
-            const allProductsForSelect = React.useMemo(() => { // Renamed from availableProducts
+            const allProductsForSelect = React.useMemo(() => { 
                 return products
-                    // .filter(p => !inventory.some(i => i.product.id === p.id)) // <-- This filter is REMOVED
                     .map(p => {
-                        // Find the "Telegram Code" property
                         const telegramCodeProp = p.productproperty?.find(
                             prop => prop.propertykey?.title === 'کد کالا (تلگرام)'
                         );
                         const telegramCode = telegramCodeProp ? telegramCodeProp.value : '';
                         const baseTitle = `${p.brand ? p.brand.title + ' ' : ''}${p.title}`;
-                        // Construct a readable title for the select dropdown
                         const displayTitle = `${telegramCode ? `[${telegramCode}] ` : ''}${baseTitle} [Product ID = ${p.id}]`;
                         return { id: p.id, title: displayTitle };
                     });
-            }, [products]); // Dependency on `inventory` removed
+            }, [products]); 
 
-            // NEW: Create a filtered list based on the highlighted product
             const filteredInventory = React.useMemo(() => {
                 if (highlightedProductId) {
                     return inventory.filter(item => item.product.id === highlightedProductId);
@@ -332,7 +354,6 @@
                 return inventory; // Return all if no highlight
             }, [inventory, highlightedProductId]);
 
-            // Find warehouse name from attributes
             const warehouseAttr = location?.location_attribute_value?.find(attr => attr.location_attribute_key.title.toLowerCase().trim() === 'warehouse name');
             const warehouseName = warehouseAttr?.value || location?.title || 'انبار اصلی';
             const modalTitle = `مدیریت موجودی: ${location?.supplier?.fullname} - ${warehouseName} (کد: ${location?.id})`;
@@ -369,7 +390,7 @@
 
                             {/* Existing Inventory List */}
                             <div className="space-y-2 max-h-[50vh] overflow-y-auto pr-2">
-                                {filteredInventory.map(item => { // MODIFIED: Use filteredInventory
+                                {filteredInventory.map(item => { 
                                     const telegramCodeProp = item.product.productproperty?.find(
                                         prop => prop.propertykey?.title === 'کد کالا (تلگرام)'
                                     );
@@ -378,9 +399,30 @@
                                         <div key={item.product.id} className="p-3 bg-gray-50 dark:bg-gray-700/50 rounded-md flex flex-wrap items-center justify-between gap-4">
                                             <span className="font-semibold flex-grow min-w-[200px]">{`${telegramCode ? `[${telegramCode}] ` : ''}${item.product.brand ? item.product.brand.title + ' ' : ''}${item.product.title} [Product ID = ${item.product.id}]`}</span>
                                             <div className="flex items-center gap-3 flex-wrap">
-                                                <input type="number" min="0" placeholder="قیمت" defaultValue={item.unitprice} onBlur={e => handleUpdateStock(item.product.id, 'unitprice', e.target.value === '' ? null : Number(e.target.value))} className="w-28 bg-white dark:bg-gray-600 p-1 rounded-md text-center" />
-                                                <input type="number" min="0" placeholder="تعداد" defaultValue={item.quantity} onBlur={e => handleUpdateStock(item.product.id, 'quantity', e.target.value === '' ? null : Number(e.target.value))} className="w-20 bg-white dark:bg-gray-600 p-1 rounded-md text-center" />
-                                                <label className="flex items-center gap-1 text-sm"><input type="checkbox" defaultChecked={item.is_available} onChange={e => handleUpdateStock(item.product.id, 'is_available', e.target.checked)} className="rounded" /> موجود</label>
+                                                <input 
+                                                    type="number" 
+                                                    min="0" 
+                                                    placeholder="قیمت" 
+                                                    value={item.unitprice || ''} 
+                                                    onChange={e => handleLocalStockChange(item.product.id, 'unitprice', e.target.value)} 
+                                                    className="w-28 bg-white dark:bg-gray-600 p-1 rounded-md text-center" 
+                                                />
+                                                <input 
+                                                    type="number" 
+                                                    min="0" 
+                                                    placeholder="تعداد" 
+                                                    value={item.quantity || ''} 
+                                                    onChange={e => handleLocalStockChange(item.product.id, 'quantity', e.target.value)} 
+                                                    className="w-20 bg-white dark:bg-gray-600 p-1 rounded-md text-center" 
+                                                />
+                                                <label className="flex items-center gap-1 text-sm">
+                                                    <input 
+                                                        type="checkbox" 
+                                                        checked={item.is_available} 
+                                                        onChange={e => handleLocalStockChange(item.product.id, 'is_available', e.target.checked)} 
+                                                        className="rounded" 
+                                                    /> موجود
+                                                </label>
                                                 <button onClick={() => handleDeleteStock(item.product.id)} className="text-red-500 hover:text-red-700 font-bold text-lg leading-none">×</button>
                                             </div>
                                         </div>
@@ -391,6 +433,32 @@
                                     <p className="text-center text-gray-500 py-4">این محصول در لیست موجودی یافت نشد (ممکن است مشکلی رخ داده باشد).</p>
                                 )}
                             </div>
+
+                            {/* NEW: Modal Footer with Save Button */}
+                            <div className="mt-6 pt-4 border-t border-gray-200 dark:border-gray-700 flex justify-end gap-3">
+                                <button 
+                                    onClick={onClose} 
+                                    disabled={isSaving}
+                                    className="bg-gray-200 hover:bg-gray-300 dark:bg-gray-600 dark:hover:bg-gray-500 text-gray-800 dark:text-gray-100 px-4 py-2 rounded-lg font-semibold disabled:opacity-50"
+                                >
+                                    انصراف
+                                </button>
+                                <button 
+                                    onClick={handleSaveAndExit} 
+                                    disabled={isSaving}
+                                    className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-semibold disabled:opacity-50 flex items-center gap-2"
+                                >
+                                    {isSaving ? (
+                                        <>
+                                            <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                                            ذخیره...
+                                        </>
+                                    ) : (
+                                        'ذخیره و خروج'
+                                    )}
+                                </button>
+                            </div>
+
                         </div>
                     )}
                 </Modal>
@@ -582,5 +650,4 @@
     </script>
 </body>
 </html>
-
 
