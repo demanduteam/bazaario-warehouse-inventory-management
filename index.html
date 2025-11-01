@@ -72,6 +72,35 @@
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
         }
+        /* NEW: Toast Styles */
+        .toast-container {
+            position: fixed;
+            bottom: 1.5rem;
+            left: 1.5rem;
+            z-index: 1000;
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+        }
+        .toast {
+            padding: 1rem 1.5rem;
+            border-radius: 0.5rem;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            color: #fff;
+            opacity: 0;
+            transform: translateY(20px);
+            transition: opacity 0.3s ease, transform 0.3s ease;
+        }
+        .toast.show {
+            opacity: 1;
+            transform: translateY(0);
+        }
+        .toast-success {
+            background-color: #059669; /* bg-green-600 */
+        }
+        .toast-error {
+            background-color: #dc2626; /* bg-red-600 */
+        }
     </style>
 </head>
 <body class="dark">
@@ -105,6 +134,7 @@
             );
         };
 
+        // RE-ADDED: SearchableSelect Component
         const SearchableSelect = ({ options, value, onChange, placeholder, disabled = false }) => {
             const [searchTerm, setSearchTerm] = React.useState('');
             const [isOpen, setIsOpen] = React.useState(false);
@@ -171,11 +201,22 @@
             );
         };
 
+        // NEW: Toast Component
+        const Toast = ({ message, type, visible }) => {
+            if (!visible) return null;
+            const toastClass = type === 'success' ? 'toast-success' : 'toast-error';
+            return (
+                <div className={`toast ${visible ? 'show' : ''} ${toastClass}`}>
+                    {message}
+                </div>
+            );
+        };
+
         // ==================================================
         // Core Components for this App
         // ==================================================
         
-        const InventoryManagementModal = ({ isOpen, onClose, location, products }) => {
+        const InventoryManagementModal = ({ isOpen, onClose, location, products, showToast }) => { // MODIFIED: Added showToast
             const [inventory, setInventory] = React.useState([]);
             const [isLoading, setIsLoading] = React.useState(true);
             const [isSaving, setIsSaving] = React.useState(false); // NEW: Saving state
@@ -183,6 +224,7 @@
             const [formInfo, setFormInfo] = React.useState(''); // State for form-specific info/warnings
             const [newProductForm, setNewProductForm] = React.useState({ product_id: '', quantity: '', unitprice: '', is_available: true });
             const [highlightedProductId, setHighlightedProductId] = React.useState(null); // State to filter list
+            const [productToDelete, setProductToDelete] = React.useState(null); // NEW: State for delete confirmation
 
             const fetchInventory = React.useCallback(async () => {
                 if (!location) return;
@@ -250,30 +292,42 @@
                     }
 
                     setIsSaving(false);
+                    showToast('تغییرات با موفقیت ذخیره شد', 'success'); // NEW: Success toast
                     onClose(); // Close modal on success
                 } catch (err) {
                     console.error("Error saving stock:", err);
                     setError(`خطا در ذخیره تغییرات: ${err.message}`);
+                    showToast('خطا در ذخیره تغییرات', 'error'); // NEW: Error toast
                     setIsSaving(false);
                 }
             };
 
-            const handleDeleteStock = async (productId) => {
-                // This remains an immediate action
+            // RENAMED: from handleDeleteStock to handleConfirmDelete
+            const handleConfirmDelete = async () => {
+                if (!productToDelete) return;
+
+                const productIdToDelete = productToDelete.product.id;
+                
+                // Optimistic UI update
                 const oldInventory = [...inventory];
-                setInventory(prev => prev.filter(item => item.product.id !== productId));
+                setInventory(prev => prev.filter(item => item.product.id !== productIdToDelete));
+                
+                // Close the confirmation modal
+                setProductToDelete(null); 
 
                 const { error } = await supabaseClient
                     .from('supplierstock')
                     .delete()
                     .eq('location_id', location.id)
-                    .eq('productid', productId);
+                    .eq('productid', productIdToDelete);
                 
                 if (error) {
                     setError(`خطا در حذف: ${error.message}`);
+                    showToast('خطا در حذف محصول', 'error'); // NEW: Error toast
                     setInventory(oldInventory); // Revert on failure
                 } else {
-                    if (highlightedProductId === productId) {
+                    showToast('محصول با موفقیت حذف شد', 'success'); // NEW: Success toast
+                    if (highlightedProductId === productIdToDelete) {
                         setHighlightedProductId(null);
                         setFormInfo('');
                         setNewProductForm({ product_id: '', quantity: '', unitprice: '', is_available: true });
@@ -307,12 +361,19 @@
                 });
                 if (error) {
                     setError(`خطا در افزودن محصول: ${error.message}`);
+                    showToast('خطا در افزودن محصول', 'error'); // NEW: Error toast
                 } else {
                     setNewProductForm({ product_id: '', quantity: '', unitprice: '', is_available: true });
                     setFormInfo(''); 
                     setHighlightedProductId(null); 
+                    showToast('محصول با موفقیت اضافه شد', 'success'); // NEW: Success toast
                     fetchInventory(); // Refresh the list
                 }
+            };
+
+            // NEW: Function to open the delete confirmation modal
+            const requestDelete = (item) => {
+                setProductToDelete(item);
             };
 
             const handleProductSelect = (id) => {
@@ -423,7 +484,8 @@
                                                         className="rounded" 
                                                     /> موجود
                                                 </label>
-                                                <button onClick={() => handleDeleteStock(item.product.id)} className="text-red-500 hover:text-red-700 font-bold text-lg leading-none">×</button>
+                                                {/* MODIFIED: Calls requestDelete instead of handleConfirmDelete */}
+                                                <button onClick={() => requestDelete(item)} className="text-red-500 hover:text-red-700 font-bold text-lg leading-none">×</button>
                                             </div>
                                         </div>
                                     )
@@ -461,6 +523,41 @@
 
                         </div>
                     )}
+
+                    {/* NEW: Delete Confirmation Modal */}
+                    <Modal 
+                        isOpen={!!productToDelete} 
+                        onClose={() => setProductToDelete(null)} 
+                        title="تایید حذف محصول"
+                    >
+                        <div className="space-y-6">
+                            <p>
+                                آیا از حذف محصول زیر از این انبار اطمینان دارید؟
+                                <br />
+                                <strong className="block mt-2 font-semibold text-lg">
+                                    {productToDelete?.product.brand ? productToDelete.product.brand.title + ' ' : ''}{productToDelete?.product.title}
+                                </strong>
+                            </p>
+                            <p className="text-sm text-yellow-500 bg-yellow-100 dark:bg-yellow-900/50 p-3 rounded-lg">
+                                این عملیات غیرقابل بازگشت است و محصول به طور کامل از موجودی این انبار حذف خواهد شد.
+                            </p>
+                            <div className="flex justify-end gap-3 pt-4 border-t border-gray-200 dark:border-gray-700">
+                                <button
+                                    onClick={() => setProductToDelete(null)}
+                                    className="bg-gray-200 hover:bg-gray-300 dark:bg-gray-600 dark:hover:bg-gray-500 text-gray-800 dark:text-gray-100 px-4 py-2 rounded-lg font-semibold"
+                                >
+                                    انصراف
+                                </button>
+                                <button
+                                    onClick={handleConfirmDelete}
+                                    className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg font-semibold"
+                                >
+                                    بله، حذف کن
+                                </button>
+                            </div>
+                        </div>
+                    </Modal>
+
                 </Modal>
             );
         };
@@ -479,6 +576,19 @@
 
             // Modal States
             const [isInventoryModalOpen, setInventoryModalOpen] = React.useState(false);
+
+            // NEW: Toast State
+            const [toast, setToast] = React.useState({ message: '', type: '', visible: false, id: 0 });
+
+            // NEW: Show Toast Function
+            const showToast = (message, type = 'success') => {
+                const id = Date.now();
+                setToast({ message, type, visible: true, id });
+                setTimeout(() => {
+                    // Only hide if it's the same toast
+                    setToast(currentToast => (currentToast.id === id ? { ...currentToast, visible: false } : currentToast));
+                }, 3000);
+            };
 
             const fetchData = async () => {
                 setIsLoading(true);
@@ -569,6 +679,11 @@
 
             return (
                  <div className="p-4 sm:p-6 lg:p-8 text-gray-900 dark:text-gray-100">
+                    {/* NEW: Toast Container */}
+                    <div className="toast-container">
+                        <Toast message={toast.message} type={toast.type} visible={toast.visible} />
+                    </div>
+
                     <h1 className="text-2xl md:text-3xl font-bold mb-6">مدیریت موجودی انبارها (مکان تامین‌کنندگان)</h1>
                     
                     <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow-md mb-6">
@@ -628,6 +743,7 @@
                             onClose={() => setInventoryModalOpen(false)} 
                             location={managingLocation} 
                             products={products} 
+                            showToast={showToast} // MODIFIED: Pass showToast down
                         />
                     )}
                 </div>
@@ -650,4 +766,7 @@
     </script>
 </body>
 </html>
+
+
+
 
