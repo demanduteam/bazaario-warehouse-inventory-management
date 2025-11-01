@@ -82,6 +82,7 @@
         // Supabase Client Setup
         // ==================================================
         const { createClient } = supabase;
+        // NOTE: These are public keys and are safe to be exposed in client-side code.
         const supabaseUrl = 'https://wehyjatotbzxargnxasg.supabase.co';
         const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndlaHlqYXRvdGJ6eGFyZ254YXNnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTE5MTIwMjEsImV4cCI6MjA2NzQ4ODAyMX0.2R448DuEBlTrNvaYXiYZ8D5M7MJNv7n1qmIDHQBNFiY';
         const supabaseClient = createClient(supabaseUrl, supabaseKey, { global: { fetch: window.fetch.bind(window) } });
@@ -114,6 +115,7 @@
             const filteredOptions = React.useMemo(() => {
                 if (!searchTerm) return options;
                 const lowerCaseSearchTerm = searchTerm.toLowerCase();
+                // Search by title or ID
                 return options.filter(opt =>
                     opt.title.toLowerCase().includes(lowerCaseSearchTerm) ||
                     opt.id.toString().includes(lowerCaseSearchTerm)
@@ -177,13 +179,16 @@
             const [inventory, setInventory] = React.useState([]);
             const [isLoading, setIsLoading] = React.useState(true);
             const [error, setError] = React.useState('');
+            const [formInfo, setFormInfo] = React.useState(''); // State for form-specific info/warnings
             const [newProductForm, setNewProductForm] = React.useState({ product_id: '', quantity: '', unitprice: '', is_available: true });
+            const [highlightedProductId, setHighlightedProductId] = React.useState(null); // NEW: State to filter list
 
             const fetchInventory = React.useCallback(async () => {
                 if (!location) return;
                 setIsLoading(true);
                 setError('');
                 try {
+                    // Fetch all stock for this specific location, joining product details
                     const { data, error: stockError } = await supabaseClient
                         .from('supplierstock')
                         .select('*, product(id, title, brand(title), productproperty(*, propertykey(title)))')
@@ -207,32 +212,63 @@
             }, [isOpen, fetchInventory]);
             
             const handleUpdateStock = async (productId, field, value) => {
+                // Optimistic update
+                setInventory(prev => prev.map(item => 
+                    item.product.id === productId ? { ...item, [field]: value } : item
+                ));
+
                 const { error } = await supabaseClient
                     .from('supplierstock')
                     .update({ [field]: value })
                     .eq('location_id', location.id)
-                    .eq('productid', productId);
+                    .eq('productid', productId); // Use productid which is the foreign key
 
                 if (error) {
                     setError(`خطا در به‌روزرسانی: ${error.message}`);
-                    // Optional: show a toast notification
-                    fetchInventory(); // Re-fetch to revert optimistic update on failure
+                    // Re-fetch to revert optimistic update on failure
+                    fetchInventory(); 
                 }
             };
 
             const handleDeleteStock = async (productId) => {
+                // Optimistic delete
+                const oldInventory = [...inventory];
+                setInventory(prev => prev.filter(item => item.product.id !== productId));
+
                 const { error } = await supabaseClient
                     .from('supplierstock')
                     .delete()
                     .eq('location_id', location.id)
                     .eq('productid', productId);
-                if (error) setError(`خطا در حذف: ${error.message}`);
-                else setInventory(prev => prev.filter(item => item.product.id !== productId));
+                
+                if (error) {
+                    setError(`خطا در حذف: ${error.message}`);
+                    setInventory(oldInventory); // Revert on failure
+                } else {
+                    // If the deleted product was the highlighted one, clear highlight
+                    if (highlightedProductId === productId) {
+                        setHighlightedProductId(null);
+                        setFormInfo('');
+                        setNewProductForm({ product_id: '', quantity: '', unitprice: '', is_available: true });
+                    }
+                }
             };
             
             const handleAddProduct = async (e) => {
                 e.preventDefault();
-                if (!newProductForm.product_id) return;
+                setFormInfo(''); // Clear info
+                setError(''); // Clear main error
+                if (!newProductForm.product_id) {
+                    setFormInfo('لطفا یک محصول انتخاب کنید.');
+                    return;
+                }
+
+                // Check for duplicate
+                const isAlreadyAdded = inventory.some(i => i.product.id === newProductForm.product_id);
+                if (isAlreadyAdded) {
+                    setFormInfo('این محصول در حال حاضر در انبار موجود است. نمی‌توانید آن را دوباره اضافه کنید.');
+                    return; // Stop execution
+                }
                 
                 const { error } = await supabaseClient.from('supplierstock').insert({
                     location_id: location.id,
@@ -246,24 +282,57 @@
                     setError(`خطا در افزودن محصول: ${error.message}`);
                 } else {
                     setNewProductForm({ product_id: '', quantity: '', unitprice: '', is_available: true });
-                    fetchInventory();
+                    setFormInfo(''); // Clear form info
+                    setHighlightedProductId(null); // Clear highlight
+                    fetchInventory(); // Refresh the list
                 }
             };
+
+            const handleProductSelect = (id) => {
+                setFormInfo(''); // Clear previous info
+                setError(''); // Clear main error
+                if (!id) {
+                    setNewProductForm({...newProductForm, product_id: ''});
+                    setHighlightedProductId(null); // Clear highlight if no ID
+                    return;
+                }
+                
+                const isAlreadyAdded = inventory.some(i => i.product.id === id);
+                if (isAlreadyAdded) {
+                    setFormInfo('این محصول در حال حاضر در انبار موجود است. می‌توانید آن را در لیست پایین ویرایش کنید.');
+                    setHighlightedProductId(id); // NEW: Set product to highlight/filter
+                } else {
+                    setHighlightedProductId(null); // NEW: Clear highlight if it's a new product
+                }
+                setNewProductForm({...newProductForm, product_id: id});
+            };
             
-            const availableProducts = React.useMemo(() => {
+            // Memoize products available to add (those not already in this location's inventory)
+            const allProductsForSelect = React.useMemo(() => { // Renamed from availableProducts
                 return products
-                    .filter(p => !inventory.some(i => i.product.id === p.id))
+                    // .filter(p => !inventory.some(i => i.product.id === p.id)) // <-- This filter is REMOVED
                     .map(p => {
+                        // Find the "Telegram Code" property
                         const telegramCodeProp = p.productproperty?.find(
                             prop => prop.propertykey?.title === 'کد کالا (تلگرام)'
                         );
                         const telegramCode = telegramCodeProp ? telegramCodeProp.value : '';
                         const baseTitle = `${p.brand ? p.brand.title + ' ' : ''}${p.title}`;
+                        // Construct a readable title for the select dropdown
                         const displayTitle = `${telegramCode ? `[${telegramCode}] ` : ''}${baseTitle} [Product ID = ${p.id}]`;
                         return { id: p.id, title: displayTitle };
                     });
-            }, [products, inventory]);
+            }, [products]); // Dependency on `inventory` removed
 
+            // NEW: Create a filtered list based on the highlighted product
+            const filteredInventory = React.useMemo(() => {
+                if (highlightedProductId) {
+                    return inventory.filter(item => item.product.id === highlightedProductId);
+                }
+                return inventory; // Return all if no highlight
+            }, [inventory, highlightedProductId]);
+
+            // Find warehouse name from attributes
             const warehouseAttr = location?.location_attribute_value?.find(attr => attr.location_attribute_key.title.toLowerCase().trim() === 'warehouse name');
             const warehouseName = warehouseAttr?.value || location?.title || 'انبار اصلی';
             const modalTitle = `مدیریت موجودی: ${location?.supplier?.fullname} - ${warehouseName} (کد: ${location?.id})`;
@@ -274,12 +343,14 @@
                     {error && <p className="text-red-500 mb-4 p-3 bg-red-100 dark:bg-red-900/50 rounded-lg">{error}</p>}
                     {!isLoading && (
                         <div className="space-y-4">
+                            {/* Add New Product Form */}
                             <form onSubmit={handleAddProduct} className="p-4 border border-gray-200 dark:border-gray-700 rounded-lg space-y-3 bg-gray-50 dark:bg-gray-800/50">
                                 <h4 className="font-semibold">افزودن محصول جدید به انبار</h4>
+                                {formInfo && <p className="text-yellow-500 text-sm p-2 bg-yellow-100 dark:bg-yellow-900/50 rounded-md">{formInfo}</p>}
                                 <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
                                     <div className="md:col-span-2">
                                         <label className="text-sm block mb-1">محصول</label>
-                                        <SearchableSelect options={availableProducts} value={newProductForm.product_id} onChange={id => setNewProductForm({...newProductForm, product_id: id})} placeholder="انتخاب محصول..." />
+                                        <SearchableSelect options={allProductsForSelect} value={newProductForm.product_id} onChange={handleProductSelect} placeholder="انتخاب محصول..." />
                                     </div>
                                     <div>
                                         <label className="text-sm block mb-1">قیمت (تومان)</label>
@@ -295,8 +366,10 @@
                                     <button type="submit" className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg font-semibold">افزودن</button>
                                 </div>
                             </form>
+
+                            {/* Existing Inventory List */}
                             <div className="space-y-2 max-h-[50vh] overflow-y-auto pr-2">
-                                {inventory.map(item => {
+                                {filteredInventory.map(item => { // MODIFIED: Use filteredInventory
                                     const telegramCodeProp = item.product.productproperty?.find(
                                         prop => prop.propertykey?.title === 'کد کالا (تلگرام)'
                                     );
@@ -314,6 +387,9 @@
                                     )
                                 })}
                                 {inventory.length === 0 && <p className="text-center text-gray-500 py-4">موجودی برای این مکان ثبت نشده است.</p>}
+                                {highlightedProductId && filteredInventory.length === 0 && inventory.length > 0 && (
+                                    <p className="text-center text-gray-500 py-4">این محصول در لیست موجودی یافت نشد (ممکن است مشکلی رخ داده باشد).</p>
+                                )}
                             </div>
                         </div>
                     )}
@@ -340,6 +416,7 @@
                 setIsLoading(true);
                 setError('');
                 try {
+                    // 1. Get the 'Supplier' role ID
                     const supplierRoleRes = await supabaseClient.from('role').select('id').eq('title', 'Supplier').single();
                     if (supplierRoleRes.error) throw supplierRoleRes.error;
                     const supplierRoleId = supplierRoleRes.data?.id;
@@ -349,8 +426,7 @@
                         throw new Error("Role 'Supplier' not found.");
                     }
                     
-                    // New paginated product fetch function to ensure all products are loaded,
-                    // bypassing the default 1000-row limit.
+                    // 2. Fetch all products (paginated to get all results)
                     const fetchAllProducts = async () => {
                         let allProducts = [];
                         let page = 0;
@@ -370,7 +446,6 @@
                             if (data && data.length > 0) {
                                 allProducts = allProducts.concat(data);
                                 page++;
-                                // If we get less than a full page, we've reached the end
                                 if (data.length < pageSize) {
                                     keepFetching = false;
                                 }
@@ -381,13 +456,16 @@
                         return allProducts;
                     };
                     
+                    // 3. Fetch locations and all products in parallel
                     const [locationsRes, allProducts] = await Promise.all([
+                        // Get all userlocations, joining where profile role is 'Supplier'
                         supabaseClient.from('userlocation').select('location!inner(*, city(*, province(*)), shippingcompany(*), location_attribute_value(*, location_attribute_key(title))), profiles!inner(id, fullname, roleid)').eq('profiles.roleid', supplierRoleId),
                         fetchAllProducts()
                     ]);
 
                     if (locationsRes.error) throw locationsRes.error;
 
+                    // Set state with results
                     setSupplierLocations(locationsRes.data || []);
                     setProducts(allProducts || []);
 
@@ -404,10 +482,12 @@
             }, []);
 
             const handleManageInventory = (location, supplier) => {
+                // Combine location and supplier info for the modal
                 setManagingLocation({ ...location, supplier });
                 setInventoryModalOpen(true);
             };
             
+            // Memoized filtering for search
             const filteredLocations = React.useMemo(() => {
                 if (!searchTerm) return supplierLocations;
                 return supplierLocations.filter(item => {
@@ -439,6 +519,7 @@
                     {!isLoading && (
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                             {filteredLocations.length > 0 ? filteredLocations.map(item => {
+                                // Find warehouse name from attributes
                                 const warehouseAttr = item.location.location_attribute_value?.find(attr => attr.location_attribute_key.title.toLowerCase().trim() === 'warehouse name');
                                 const warehouseName = warehouseAttr?.value || item.location.title || 'انبار اصلی';
                                 
@@ -467,14 +548,14 @@
                             <div className="col-span-full text-center py-12 bg-white dark:bg-gray-800 rounded-lg shadow">
                                 <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">هیچ مکانی یافت نشد</h3>
                                 <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">مکانی برای تامین‌کنندگان با فیلترهای انتخابی شما مطابقت ندارد.</p>
-                             </div>
+                               </div>
                             }
                         </div>
                     )}
                     
                     {isInventoryModalOpen && managingLocation && (
                         <InventoryManagementModal 
-                            key={managingLocation.id} 
+                            key={managingLocation.id} // Ensure modal re-renders with new data
                             isOpen={isInventoryModalOpen} 
                             onClose={() => setInventoryModalOpen(false)} 
                             location={managingLocation} 
@@ -501,6 +582,5 @@
     </script>
 </body>
 </html>
-
 
 
