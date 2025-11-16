@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>مدیریت موجودی انبارها</title>
     
+    <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
         tailwind.config = {
@@ -19,11 +20,15 @@
         }
     </script>
     
+    <!-- React -->
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <!-- Babel -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Supabase -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
+    <!-- Custom Styles -->
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;700&display=swap');
         body {
@@ -45,6 +50,10 @@
             justify-content: center;
             z-index: 100;
             transition: opacity 0.3s ease-in-out;
+            opacity: 0; /* Hidden by default */
+        }
+        .modal-overlay.open {
+             opacity: 1; /* Show when open */
         }
         .modal-content {
             padding: 1.5rem;
@@ -55,6 +64,10 @@
             overflow-y: auto;
             transform: scale(0.95);
             transition: transform 0.3s ease-in-out;
+            background-color: #ffffff; /* Default light */
+        }
+        .dark .modal-content {
+             background-color: #1f2937; /* dark:bg-gray-800 */
         }
         .modal-overlay.open .modal-content {
             transform: scale(1);
@@ -122,8 +135,8 @@
         const Modal = ({ isOpen, onClose, title, children }) => {
             if (!isOpen) return null;
             return (
-                <div className="modal-overlay open" onClick={onClose}>
-                    <div className="modal-content bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100" onClick={e => e.stopPropagation()}>
+                <div className={`modal-overlay ${isOpen ? 'open' : ''}`} onClick={onClose}>
+                    <div className="modal-content text-gray-900 dark:text-gray-100" onClick={e => e.stopPropagation()}>
                         <div className="flex justify-between items-center mb-4 pb-3 border-b border-gray-200 dark:border-gray-600">
                             <h2 className="text-xl font-bold">{title}</h2>
                             <button onClick={onClose} className="text-gray-400 hover:text-gray-800 dark:hover:text-white text-2xl">&times;</button>
@@ -414,13 +427,13 @@
                 }
                 return inventory; // Return all if no highlight
             }, [inventory, highlightedProductId]);
-
-            const warehouseAttr = location?.location_attribute_value?.find(attr => attr.location_attribute_key.title.toLowerCase().trim() === 'warehouse name');
-            const warehouseName = warehouseAttr?.value || location?.title || 'انبار اصلی';
-            const modalTitle = `مدیریت موجودی: ${location?.supplier?.fullname} - ${warehouseName} (کد: ${location?.id})`;
-
-            return (
-                <Modal isOpen={isOpen} onClose={onClose} title={modalTitle}>
+ 
+             const warehouseAttr = location?.location_attribute_value?.find(attr => attr.location_attribute_key.title.toLowerCase().trim() === 'warehouse name');
+            const warehouseName = warehouseAttr?.value || location.city?.title || 'انبار';
+            const modalTitle = `مدیریت موجودی: ${warehouseName} (کد: ${location?.id})`;
+ 
+             return (
+                 <Modal isOpen={isOpen} onClose={onClose} title={modalTitle}>
                     {isLoading && <div className="spinner"></div>}
                     {error && <p className="text-red-500 mb-4 p-3 bg-red-100 dark:bg-red-900/50 rounded-lg">{error}</p>}
                     {!isLoading && (
@@ -524,7 +537,7 @@
                         </div>
                     )}
 
-                    {/* NEW: Delete Confirmation Modal */}
+                    {/* NEW: Delete Confirmation Modal (Nested) */}
                     <Modal 
                         isOpen={!!productToDelete} 
                         onClose={() => setProductToDelete(null)} 
@@ -670,26 +683,26 @@
                 if (!searchTerm) return supplierLocations;
                 return supplierLocations.filter(item => {
                     const searchTermLower = searchTerm.toLowerCase();
-                    const supplierNameMatch = item.profiles?.fullname?.toLowerCase().includes(searchTermLower);
                     const cityMatch = item.location?.city?.title?.toLowerCase().includes(searchTermLower);
                     const addressMatch = item.location?.address?.toLowerCase().includes(searchTermLower);
-                    return supplierNameMatch || cityMatch || addressMatch;
+                    const locationIdMatch = item.location?.id.toString().includes(searchTermLower);
+                    return cityMatch || addressMatch || locationIdMatch;
                 });
             }, [supplierLocations, searchTerm]);
-
+ 
             return (
                  <div className="p-4 sm:p-6 lg:p-8 text-gray-900 dark:text-gray-100">
                     {/* NEW: Toast Container */}
                     <div className="toast-container">
                         <Toast message={toast.message} type={toast.type} visible={toast.visible} />
                     </div>
-
-                    <h1 className="text-2xl md:text-3xl font-bold mb-6">مدیریت موجودی انبارها (مکان تامین‌کنندگان)</h1>
+ 
+                    <h1 className="text-2x1 md:text-3xl font-bold mb-6">مدیریت موجودی انبارها</h1>
                     
                     <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow-md mb-6">
                         <input
                             type="text"
-                            placeholder="جستجو بر اساس نام تامین‌کننده، شهر یا آدرس..."
+                            placeholder="جستجو بر اساس شهر، آدرس یا کد مکان..."
                             value={searchTerm}
                             onChange={e => setSearchTerm(e.target.value)}
                             className="w-full p-2 bg-gray-100 dark:bg-gray-700 border border-transparent rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
@@ -709,16 +722,11 @@
                                 return (
                                 <div key={item.location.id} className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-5 flex flex-col justify-between transition-all hover:shadow-xl hover:-translate-y-1">
                                     <div>
-                                        <h3 className="text-xl font-bold text-gray-900 dark:text-white">
-                                            {item.profiles.fullname}
+                                        <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-4">
+                                            {item.location.city?.title || 'شهر نامشخص'}
                                         </h3>
-                                        <div className="mt-4 text-sm text-gray-600 dark:text-gray-300 space-y-2 border-t border-gray-200 dark:border-gray-700 pt-3">
-                                            <p><strong>استان:</strong> {item.location.city?.province?.title || '-'}</p>
-                                            <p><strong>شهر:</strong> {item.location.city?.title || '-'}</p>
-                                            <p><strong>نام انبار:</strong> {warehouseName}</p>
+                                        <div className="text-sm text-gray-600 dark:text-gray-300 space-y-2">
                                             <p><strong>کد مکان:</strong> {item.location.id}</p>
-                                            <p><strong>آدرس:</strong> {item.location.address || '-'}</p>
-                                            <p><strong>کد پستی:</strong> {item.location.postalcode || '-'}</p>
                                         </div>
                                     </div>
                                     <div className="mt-5 pt-4 border-t border-gray-200 dark:border-gray-700 flex justify-end items-center gap-3">
@@ -731,7 +739,7 @@
                             <div className="col-span-full text-center py-12 bg-white dark:bg-gray-800 rounded-lg shadow">
                                 <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">هیچ مکانی یافت نشد</h3>
                                 <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">مکانی برای تامین‌کنندگان با فیلترهای انتخابی شما مطابقت ندارد.</p>
-                               </div>
+                                </div>
                             }
                         </div>
                     )}
@@ -766,7 +774,3 @@
     </script>
 </body>
 </html>
-
-
-
-
