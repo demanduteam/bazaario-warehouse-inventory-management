@@ -135,7 +135,7 @@
         const Modal = ({ isOpen, onClose, title, children }) => {
             if (!isOpen) return null;
             return (
-                <div className={`modal-overlay ${isOpen ? 'open' : ''}`} onClick={onClose}>
+                <div className={`modal-overlay ${isOpen ? 'open' : ''}`} onClick={onClose} style={{ zIndex: title.includes('تاریخچه') ? 110 : 100 }}>
                     <div className="modal-content text-gray-900 dark:text-gray-100" onClick={e => e.stopPropagation()}>
                         <div className="flex justify-between items-center mb-4 pb-3 border-b border-gray-200 dark:border-gray-600">
                             <h2 className="text-xl font-bold">{title}</h2>
@@ -237,7 +237,14 @@
             const [formInfo, setFormInfo] = React.useState(''); // State for form-specific info/warnings
             const [newProductForm, setNewProductForm] = React.useState({ product_id: '', quantity: '', unitprice: '', is_available: true });
             const [highlightedProductId, setHighlightedProductId] = React.useState(null); // State to filter list
+            
             const [productToDelete, setProductToDelete] = React.useState(null); // NEW: State for delete confirmation
+            
+            // NEW: Price History State
+            const [allPriceHistory, setAllPriceHistory] = React.useState({});
+
+            // MODIFIED: Track only modified items (Event-driven) instead of full snapshot
+            const [dirtyItems, setDirtyItems] = React.useState(new Set());
 
             const fetchInventory = React.useCallback(async () => {
                 if (!location) return;
@@ -252,7 +259,28 @@
                     
                     if (stockError) throw stockError;
                     
+                    // Fetch history for all items in this location
+                    const { data: historyData, error: historyError } = await supabaseClient
+                        .from('supplierstock_price_history')
+                        .select('*')
+                        .eq('location_id', location.id)
+                        .order('changed_at', { ascending: false });
+
+                    let historyMap = {};
+                    if (historyError && historyError.code !== '42P01') {
+                        console.error("Error fetching history:", historyError);
+                    } else if (historyData) {
+                        historyData.forEach(h => {
+                            if (!historyMap[h.productid]) historyMap[h.productid] = [];
+                            historyMap[h.productid].push(h);
+                        });
+                    }
+
                     setInventory(data || []);
+                    setAllPriceHistory(historyMap);
+                    
+                    // Reset dirty items whenever inventory is freshly loaded
+                    setDirtyItems(new Set());
                 } catch (err) {
                     console.error("Error fetching inventory:", err);
                     setError(`خطا در بارگذاری موجودی: ${err.message}`);
@@ -278,6 +306,9 @@
                         item.product.id === productId ? { ...item, [field]: parsedValue } : item
                     )
                 );
+                
+                // Add the modified product to the dirty list
+                setDirtyItems(prev => new Set(prev).add(productId));
             };
 
             // NEW: Save all changes and close modal
@@ -285,13 +316,24 @@
                 setIsSaving(true);
                 setError('');
                 try {
-                    const updatePromises = inventory.map(item => 
+                    // Only get items that were explicitly modified by the user
+                    const itemsToUpdate = inventory.filter(item => dirtyItems.has(item.product.id));
+                    
+                    // If absolutely no changes were made, just close the window
+                    if (itemsToUpdate.length === 0) {
+                        setIsSaving(false);
+                        onClose();
+                        return;
+                    }
+
+                    const updatePromises = itemsToUpdate.map(item => 
                         supabaseClient
                             .from('supplierstock')
                             .update({ 
                                 quantity: item.quantity,
                                 unitprice: item.unitprice,
-                                is_available: item.is_available 
+                                is_available: item.is_available
+                                // lastupdatedat is REMOVED! The SQL trigger will handle this automatically.
                             })
                             .eq('location_id', location.id)
                             .eq('productid', item.product.id)
@@ -371,6 +413,7 @@
                     quantity: newProductForm.quantity === '' ? null : Number(newProductForm.quantity),
                     unitprice: newProductForm.unitprice === '' ? null : Number(newProductForm.unitprice),
                     is_available: newProductForm.is_available
+                    // lastupdatedat is REMOVED here too! DB handles it on INSERT via default value.
                 });
                 if (error) {
                     setError(`خطا در افزودن محصول: ${error.message}`);
@@ -469,10 +512,40 @@
                                         prop => prop.propertykey?.title === 'کد کالا (تلگرام)'
                                     );
                                     const telegramCode = telegramCodeProp ? telegramCodeProp.value : '';
+                                    
+                                    const dateString = item.lastupdatedat || item.updated_at || item.created_at;
+                                    const formattedDate = dateString ? new Date(dateString).toLocaleDateString('fa-IR', {
+                                        year: 'numeric',
+                                        month: 'long',
+                                        day: 'numeric',
+                                        hour: '2-digit',
+                                        minute: '2-digit'
+                                    }) : 'نامشخص';
+
+                                    const itemHistory = allPriceHistory[item.product.id] || [];
+
                                     return (
-                                        <div key={item.product.id} className="p-3 bg-gray-50 dark:bg-gray-700/50 rounded-md flex flex-wrap items-center justify-between gap-4">
-                                            <span className="font-semibold flex-grow min-w-[200px]">{`${telegramCode ? `[${telegramCode}] ` : ''}${item.product.brand ? item.product.brand.title + ' ' : ''}${item.product.title} [Product ID = ${item.product.id}]`}</span>
-                                            <div className="flex items-center gap-3 flex-wrap">
+                                        <div key={item.product.id} className="p-3 bg-gray-50 dark:bg-gray-700/50 rounded-md flex flex-col xl:flex-row items-start xl:items-center justify-between gap-4">
+                                            <div className="flex flex-col flex-grow min-w-[200px] w-full xl:w-auto">
+                                                <span className="font-semibold">{`${telegramCode ? `[${telegramCode}] ` : ''}${item.product.brand ? item.product.brand.title + ' ' : ''}${item.product.title} [Product ID = ${item.product.id}]`}</span>
+                                                <span className="text-xs text-gray-500 dark:text-gray-400 mt-1.5 mb-2">
+                                                    آخرین بروزرسانی: {formattedDate}
+                                                </span>
+
+                                                {itemHistory.length > 0 && (
+                                                    <div className="bg-white dark:bg-gray-800 p-2.5 rounded border border-gray-200 dark:border-gray-600 text-xs text-gray-600 dark:text-gray-300 max-h-32 overflow-y-auto w-full xl:max-w-sm">
+                                                        <ul className="space-y-1.5">
+                                                            {itemHistory.map((hist, idx) => (
+                                                                <li key={hist.id} className={`flex justify-between items-center ${idx !== itemHistory.length - 1 ? 'border-b border-gray-100 dark:border-gray-700 pb-1.5' : ''}`}>
+                                                                    <span>تاریخ {new Date(hist.changed_at).toLocaleDateString('fa-IR', { year: 'numeric', month: 'long', day: 'numeric' })}:</span>
+                                                                    <span className="font-mono text-blue-600 dark:text-blue-400 font-bold">{hist.new_price !== null ? Number(hist.new_price).toLocaleString() : '-'} تومان</span>
+                                                                </li>
+                                                            ))}
+                                                        </ul>
+                                                    </div>
+                                                )}
+                                            </div>
+                                            <div className="flex items-center gap-3 flex-wrap xl:flex-nowrap w-full xl:w-auto mt-2 xl:mt-0">
                                                 <input 
                                                     type="number" 
                                                     min="0" 
@@ -497,8 +570,15 @@
                                                         className="rounded" 
                                                     /> موجود
                                                 </label>
+
                                                 {/* MODIFIED: Calls requestDelete instead of handleConfirmDelete */}
-                                                <button onClick={() => requestDelete(item)} className="text-red-500 hover:text-red-700 font-bold text-lg leading-none">×</button>
+                                                <button 
+                                                    onClick={() => requestDelete(item)} 
+                                                    className="text-red-500 hover:text-red-700 bg-red-100 dark:bg-red-900/40 p-1.5 rounded-lg font-bold transition-colors leading-none flex items-center justify-center w-8 h-8 mr-auto xl:mr-0"
+                                                    title="حذف محصول"
+                                                >
+                                                    ×
+                                                </button>
                                             </div>
                                         </div>
                                     )
@@ -537,7 +617,7 @@
                         </div>
                     )}
 
-                    {/* NEW: Delete Confirmation Modal (Nested) */}
+                    {/* Delete Confirmation Modal (Nested) */}
                     <Modal 
                         isOpen={!!productToDelete} 
                         onClose={() => setProductToDelete(null)} 
@@ -590,10 +670,10 @@
             // Modal States
             const [isInventoryModalOpen, setInventoryModalOpen] = React.useState(false);
 
-            // NEW: Toast State
+            // Toast State
             const [toast, setToast] = React.useState({ message: '', type: '', visible: false, id: 0 });
 
-            // NEW: Show Toast Function
+            // Show Toast Function
             const showToast = (message, type = 'success') => {
                 const id = Date.now();
                 setToast({ message, type, visible: true, id });
@@ -692,7 +772,7 @@
  
             return (
                  <div className="p-4 sm:p-6 lg:p-8 text-gray-900 dark:text-gray-100">
-                    {/* NEW: Toast Container */}
+                    {/* Toast Container */}
                     <div className="toast-container">
                         <Toast message={toast.message} type={toast.type} visible={toast.visible} />
                     </div>
@@ -751,7 +831,7 @@
                             onClose={() => setInventoryModalOpen(false)} 
                             location={managingLocation} 
                             products={products} 
-                            showToast={showToast} // MODIFIED: Pass showToast down
+                            showToast={showToast}
                         />
                     )}
                 </div>
