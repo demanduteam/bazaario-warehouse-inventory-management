@@ -538,7 +538,17 @@
                                                             {itemHistory.map((hist, idx) => (
                                                                 <li key={hist.id} className={`flex justify-between items-center ${idx !== itemHistory.length - 1 ? 'border-b border-gray-100 dark:border-gray-700 pb-1.5' : ''}`}>
                                                                     <span>تاریخ {new Date(hist.changed_at).toLocaleDateString('fa-IR', { year: 'numeric', month: 'long', day: 'numeric' })}:</span>
-                                                                    <span className="font-mono text-blue-600 dark:text-blue-400 font-bold">{hist.new_price !== null ? Number(hist.new_price).toLocaleString() : '-'} تومان</span>
+                                                                    <div className="flex items-center gap-2 font-mono">
+                                                                        {hist.old_price !== null && (
+                                                                            <span className="text-red-500 dark:text-red-400 line-through opacity-80 text-[11px]">
+                                                                                {Number(hist.old_price).toLocaleString()}
+                                                                            </span>
+                                                                        )}
+                                                                        <span className="text-blue-600 dark:text-blue-400 font-bold">
+                                                                            {hist.new_price !== null ? Number(hist.new_price).toLocaleString() : '-'} 
+                                                                            <span className="font-vazir font-normal text-gray-500 dark:text-gray-400 text-[10px] mr-1">تومان</span>
+                                                                        </span>
+                                                                    </div>
                                                                 </li>
                                                             ))}
                                                         </ul>
